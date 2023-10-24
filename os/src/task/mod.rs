@@ -22,6 +22,7 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+use crate::timer::get_time_ms;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -51,10 +52,7 @@ lazy_static! {
     /// Global variable: TASK_MANAGER
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
-        let mut tasks = [TaskControlBlock {
-            task_cx: TaskContext::zero_init(),
-            task_status: TaskStatus::UnInit,
-        }; MAX_APP_NUM];
+        let mut tasks = [(); MAX_APP_NUM].map(|_| TaskControlBlock::default());
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
             task.task_status = TaskStatus::Ready;
@@ -80,6 +78,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
+        task0.set_start_time(get_time_ms());
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -122,6 +121,7 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            inner.tasks[next].set_start_time(get_time_ms());
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -134,6 +134,24 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    fn increment_syscall_count(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].add_syscall_count(syscall_id);
+    }
+
+    fn get_current_start_time(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].start_time.unwrap()
+    }
+
+    fn get_current_syscall_count(&self, syscall_id: usize) -> u32 {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].get_syscall_count(syscall_id)
     }
 }
 
@@ -168,4 +186,19 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Increment syscall count of current task
+pub fn increment_current_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.increment_syscall_count(syscall_id);
+}
+
+/// Get start time in ms of current task
+pub fn get_current_start_time() -> usize {
+    TASK_MANAGER.get_current_start_time()
+}
+
+/// get current syscall count
+pub fn get_current_syscall_count(syscall_id: usize) -> u32 {
+    TASK_MANAGER.get_current_syscall_count(syscall_id)
 }
