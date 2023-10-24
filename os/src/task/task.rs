@@ -13,7 +13,7 @@ pub struct TaskControlBlock {
     /// record all syscall
     pub syscall_counts: Vec<SyscallRecord>,
     /// the time when this task was first run
-    pub start_time: Option<usize>,
+    pub start_time_ms: Option<usize>,
 }
 
 impl TaskControlBlock {
@@ -35,8 +35,8 @@ impl TaskControlBlock {
 
     /// set task start time if it's empty
     pub fn set_start_time(&mut self, start_time: usize) {
-        if self.start_time.is_none() {
-            self.start_time = Some(start_time);
+        if self.start_time_ms.is_none() {
+            self.start_time_ms = Some(start_time);
         }
     }
 
@@ -53,7 +53,7 @@ impl Default for TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
             syscall_counts: Vec::new(),
-            start_time: None,
+            start_time_ms: None,
         }
     }
 }

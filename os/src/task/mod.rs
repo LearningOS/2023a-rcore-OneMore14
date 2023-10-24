@@ -142,10 +142,10 @@ impl TaskManager {
         inner.tasks[current].add_syscall_count(syscall_id);
     }
 
-    fn get_current_start_time(&self) -> usize {
+    fn get_current_start_time_ms(&self) -> usize {
         let inner = self.inner.exclusive_access();
         let current = inner.current_task;
-        inner.tasks[current].start_time.unwrap()
+        inner.tasks[current].start_time_ms.unwrap()
     }
 
     fn get_current_syscall_count(&self, syscall_id: usize) -> u32 {
@@ -194,8 +194,8 @@ pub fn increment_current_syscall_count(syscall_id: usize) {
 }
 
 /// Get start time in ms of current task
-pub fn get_current_start_time() -> usize {
-    TASK_MANAGER.get_current_start_time()
+pub fn get_current_start_time_ms() -> usize {
+    TASK_MANAGER.get_current_start_time_ms()
 }
 
 /// get current syscall count
