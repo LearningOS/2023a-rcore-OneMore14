@@ -22,7 +22,7 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
-use crate::timer::get_time_ms;
+use crate::timer::get_time_us;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -78,7 +78,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
-        task0.set_start_time(get_time_ms());
+        task0.set_start_time_us(get_time_us());
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -121,7 +121,7 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
-            inner.tasks[next].set_start_time(get_time_ms());
+            inner.tasks[next].set_start_time_us(get_time_us());
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -142,10 +142,10 @@ impl TaskManager {
         inner.tasks[current].add_syscall_count(syscall_id);
     }
 
-    fn get_current_start_time_ms(&self) -> usize {
+    fn get_current_start_time_us(&self) -> usize {
         let inner = self.inner.exclusive_access();
         let current = inner.current_task;
-        inner.tasks[current].start_time_ms.unwrap()
+        inner.tasks[current].start_time_us.unwrap()
     }
 
     fn get_current_syscall_count(&self, syscall_id: usize) -> u32 {
@@ -194,8 +194,8 @@ pub fn increment_current_syscall_count(syscall_id: usize) {
 }
 
 /// Get start time in ms of current task
-pub fn get_current_start_time_ms() -> usize {
-    TASK_MANAGER.get_current_start_time_ms()
+pub fn get_current_start_time_us() -> usize {
+    TASK_MANAGER.get_current_start_time_us()
 }
 
 /// get current syscall count
