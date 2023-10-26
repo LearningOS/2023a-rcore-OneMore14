@@ -71,6 +71,7 @@ fn kernel_log_info() {
         fn ebss(); // end addr of BSS segment
         fn boot_stack_lower_bound(); // stack lower bound
         fn boot_stack_top(); // stack top
+        fn ekernel(); // end addr of kernel
     }
     logging::init();
     println!("[kernel] Hello, world!");
@@ -92,6 +93,7 @@ fn kernel_log_info() {
         boot_stack_top as usize, boot_stack_lower_bound as usize
     );
     error!("[kernel] .bss [{:#x}, {:#x})", sbss as usize, ebss as usize);
+    debug!("[kernel] .ekernel {:#x}", ekernel as usize);
 }
 
 #[no_mangle]

@@ -1,9 +1,8 @@
 //! Types related to task management
+use alloc::collections::BTreeMap;
 use super::TaskContext;
 use crate::config::TRAP_CONTEXT_BASE;
-use crate::mm::{
-    kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
-};
+use crate::mm::{kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::trap::{trap_handler, TrapContext};
 
 /// The task control block (TCB) of a task.
@@ -28,6 +27,12 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    /// the time when this task was first run
+    pub start_time_us: Option<usize>,
+
+    /// record all syscall
+    pub syscall_counts: BTreeMap<usize, u32>,
 }
 
 impl TaskControlBlock {
@@ -43,6 +48,7 @@ impl TaskControlBlock {
     pub fn new(elf_data: &[u8], app_id: usize) -> Self {
         // memory_set with elf program headers/trampoline/trap context/user stack
         let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        debug!("[kernel] app {} entry_point {}", app_id, entry_point);
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
             .unwrap()
@@ -63,6 +69,8 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            start_time_us: None,
+            syscall_counts: BTreeMap::new(),
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -95,6 +103,49 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// increment syscall count by 1
+    pub fn add_syscall_count(&mut self, syscall_id: usize) {
+        *self.syscall_counts.entry(syscall_id).or_insert(0) += 1;
+    }
+
+    /// set task start time if it's not set
+    pub fn set_start_time_us(&mut self, start_time: usize) {
+        if self.start_time_us.is_none() {
+            self.start_time_us = Some(start_time);
+        }
+    }
+
+    /// get syscall count by syscall_id
+    pub fn get_syscall_count(&self, syscall_id: usize) -> u32 {
+        self.syscall_counts.get(&syscall_id).map_or(0, |v| *v)
+    }
+
+    /// try mmap [start, end)
+    pub fn mmap(&mut self, start: VirtAddr, end: VirtAddr, permission: MapPermission) -> isize {
+        if self.is_page_allocated(start, end) {
+            return -1;
+        }
+        if self.memory_set.try_insert_framed_area(start, end, permission).is_ok() {
+            0
+        } else {
+            -1
+        }
+    }
+
+    /// try munmap [start, end). There should be a MemoryArea which is exactly have the same range
+    pub fn munmap(&mut self, start: VirtAddr, end: VirtAddr) -> isize {
+        if self.memory_set.try_munmap(start, end).is_ok() {
+            0
+        } else {
+            -1
+        }
+    }
+
+    /// check if [start, end) is allocated
+    pub fn is_page_allocated(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        self.memory_set.is_intersecting_with_range(start.floor(), end.ceil())
     }
 }
 

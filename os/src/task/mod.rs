@@ -21,8 +21,9 @@ use alloc::vec::Vec;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
-
 pub use context::TaskContext;
+use crate::mm::{VirtAddr, MapPermission};
+use crate::timer::{get_time_us};
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -79,6 +80,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.set_start_time_us(get_time_us());
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -140,6 +142,7 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            inner.tasks[next].set_start_time_us(get_time_us());
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -152,6 +155,38 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    fn increment_syscall_count(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].add_syscall_count(syscall_id);
+    }
+
+    fn get_current_syscall_count(&self, syscall_id: usize) -> u32 {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].get_syscall_count(syscall_id)
+    }
+
+    fn get_current_start_time_us(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].start_time_us.unwrap()
+    }
+
+    /// mmap [start, end)
+    fn mmap(&self, start: VirtAddr, end: VirtAddr, permission: MapPermission) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].mmap(start, end, permission)
+    }
+
+    /// munmap [start, end), it must equal to a memoryArea
+    fn munmap(&self, start: VirtAddr, end: VirtAddr) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].munmap(start, end)
     }
 }
 
@@ -201,4 +236,29 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Increment syscall count of current task
+pub fn increment_current_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.increment_syscall_count(syscall_id);
+}
+
+/// get current syscall count
+pub fn get_current_syscall_count(syscall_id: usize) -> u32 {
+    TASK_MANAGER.get_current_syscall_count(syscall_id)
+}
+
+/// Get start time in ms of current task
+pub fn get_current_start_time() -> usize {
+    TASK_MANAGER.get_current_start_time_us()
+}
+
+/// alloc memory in range [start, end)
+pub fn alloc_memory(start: VirtAddr, end: VirtAddr, permission: MapPermission) -> isize {
+    TASK_MANAGER.mmap(start, end, permission)
+}
+
+/// dealloc [start, end)
+pub fn dealloc_memory(start: VirtAddr, end: VirtAddr) -> isize {
+    TASK_MANAGER.munmap(start, end)
 }
