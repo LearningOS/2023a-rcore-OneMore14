@@ -1,8 +1,9 @@
 //! Types related to task management & Functions for completely changing TCB
+use alloc::collections::BTreeMap;
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE, MapPermission};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
@@ -68,6 +69,18 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// the time when this task was first run
+    pub start_time_us: Option<usize>,
+
+    /// record all syscall
+    pub syscall_counts: BTreeMap<usize, u32>,
+
+    /// stride
+    pub stride: usize,
+
+    /// priority
+    pub priority: usize,
 }
 
 impl TaskControlBlockInner {
@@ -84,6 +97,49 @@ impl TaskControlBlockInner {
     }
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
+    }
+
+    /// increment syscall count by 1
+    pub fn add_syscall_count(&mut self, syscall_id: usize) {
+        *self.syscall_counts.entry(syscall_id).or_insert(0) += 1;
+    }
+
+    /// get syscall count by syscall_id
+    pub fn get_syscall_count(&self, syscall_id: usize) -> u32 {
+        self.syscall_counts.get(&syscall_id).map_or(0, |v| *v)
+    }
+
+    /// set task start time if it's not set
+    pub fn set_start_time_us(&mut self, start_time: usize) {
+        if self.start_time_us.is_none() {
+            self.start_time_us = Some(start_time);
+        }
+    }
+
+    /// try mmap [start, end)
+    pub fn mmap(&mut self, start: VirtAddr, end: VirtAddr, permission: MapPermission) -> isize {
+        if self.is_page_allocated(start, end) {
+            return -1;
+        }
+        if self.memory_set.try_insert_framed_area(start, end, permission).is_ok() {
+            0
+        } else {
+            -1
+        }
+    }
+
+    /// try munmap [start, end). There should be a MemoryArea which is exactly have the same range
+    pub fn munmap(&mut self, start: VirtAddr, end: VirtAddr) -> isize {
+        if self.memory_set.try_munmap(start, end).is_ok() {
+            0
+        } else {
+            -1
+        }
+    }
+
+    /// check if [start, end) is allocated
+    pub fn is_page_allocated(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        self.memory_set.is_intersecting_with_range(start.floor(), end.ceil())
     }
 }
 
@@ -118,6 +174,10 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    start_time_us: None,
+                    syscall_counts: BTreeMap::new(),
+                    stride: 0,
+                    priority: 16,
                 })
             },
         };
@@ -162,6 +222,59 @@ impl TaskControlBlock {
         // **** release inner automatically
     }
 
+    /// create a new TaskControlBlock with elf_data
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+
+        let mut parent_inner = self.inner_exclusive_access();
+
+        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+            .unwrap()
+            .ppn();
+
+        let pid_handle = pid_alloc();
+        let kernel_stack = kstack_alloc();
+        let kernel_stack_top = kernel_stack.get_top();
+
+        let task_control_block = Arc::new(TaskControlBlock {
+            pid: pid_handle,
+            kernel_stack,
+            inner: unsafe {
+                UPSafeCell::new(TaskControlBlockInner {
+                    trap_cx_ppn,
+                    base_size: user_sp,
+                    task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+                    task_status: TaskStatus::Ready,
+                    memory_set,
+                    parent: Some(Arc::downgrade(self)),
+                    children: Vec::new(),
+                    exit_code: 0,
+                    heap_bottom: user_sp,
+                    program_brk: user_sp,
+                    start_time_us: None,
+                    syscall_counts: BTreeMap::new(),
+                    stride: 0,
+                    priority: 16,
+                })
+            },
+        });
+
+        parent_inner.children.push(task_control_block.clone());
+
+        // prepare TrapContext in user space
+        let trap_cx = task_control_block.inner_exclusive_access().get_trap_cx();
+        *trap_cx = TrapContext::app_init_context(
+            entry_point,
+            user_sp,
+            KERNEL_SPACE.exclusive_access().token(),
+            kernel_stack_top,
+            trap_handler as usize,
+        );
+
+        task_control_block
+    }
+
     /// parent process fork the child process
     pub fn fork(self: &Arc<Self>) -> Arc<Self> {
         // ---- access parent PCB exclusively
@@ -191,6 +304,10 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    start_time_us: None,
+                    syscall_counts: BTreeMap::new(),
+                    stride: 0,
+                    priority: 16,
                 })
             },
         });
