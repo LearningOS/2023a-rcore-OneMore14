@@ -36,6 +36,8 @@ pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
     Processor,
 };
+use crate::mm::{MapPermission, VirtAddr};
+
 /// Suspend the current 'Running' task and run the next task in task list.
 pub fn suspend_current_and_run_next() {
     // There must be an application running.
@@ -119,4 +121,46 @@ lazy_static! {
 ///Add init process to the manager
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+/// Increment syscall count of current task
+pub fn increment_current_syscall_count(syscall_id: usize) {
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.add_syscall_count(syscall_id);
+}
+
+/// Get start time in ms of current task
+pub fn get_current_start_time() -> usize {
+    let task = current_task().unwrap();
+    let task_inner = task.inner_exclusive_access();
+    task_inner.start_time_us.unwrap()
+}
+
+/// get current syscall count
+pub fn get_current_syscall_count(syscall_id: usize) -> u32 {
+    let task = current_task().unwrap();
+    let task_inner = task.inner_exclusive_access();
+    task_inner.get_syscall_count(syscall_id)
+}
+
+/// set task priority
+pub fn set_priority(priority: usize) {
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.priority = priority;
+}
+
+/// alloc memory in range [start, end)
+pub fn alloc_memory(start: VirtAddr, end: VirtAddr, permission: MapPermission) -> isize {
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.mmap(start, end, permission)
+}
+
+/// dealloc [start, end)
+pub fn dealloc_memory(start: VirtAddr, end: VirtAddr) -> isize {
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.munmap(start, end)
 }

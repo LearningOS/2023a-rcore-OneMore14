@@ -11,6 +11,8 @@ use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
+use crate::task::manager::BIG_STRIDE;
+use crate::timer::get_time_us;
 
 /// Processor management structure
 pub struct Processor {
@@ -47,20 +49,26 @@ impl Processor {
 }
 
 lazy_static! {
-    pub static ref PROCESSOR: UPSafeCell<Processor> = unsafe { UPSafeCell::new(Processor::new()) };
+    pub static ref PROCESSOR: UPSafeCell<Processor> = unsafe {
+        debug!("[kernel] init PROCESSOR");
+        UPSafeCell::new(Processor::new())
+    };
 }
 
 ///The main part of process execution and scheduling
 ///Loop `fetch_task` to get the process that needs to run, and switch the process through `__switch`
 pub fn run_tasks() {
+    debug!("[kernel] start run_tasks");
     loop {
         let mut processor = PROCESSOR.exclusive_access();
         if let Some(task) = fetch_task() {
             let idle_task_cx_ptr = processor.get_idle_task_cx_ptr();
             // access coming task TCB exclusively
             let mut task_inner = task.inner_exclusive_access();
+            task_inner.stride += BIG_STRIDE / task_inner.priority;
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
+            task_inner.set_start_time_us(get_time_us());
             // release coming task_inner manually
             drop(task_inner);
             // release coming task TCB manually
