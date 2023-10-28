@@ -2,16 +2,18 @@ use super::{
     block_cache_sync_all, get_block_cache, BlockDevice, DirEntry, DiskInode, DiskInodeType,
     EasyFileSystem, DIRENT_SZ,
 };
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
 /// Virtual filesystem layer over easy-fs
 pub struct Inode {
-    block_id: usize,
-    block_offset: usize,
+    block_id: usize,     // in block
+    block_offset: usize, // in bytes
     fs: Arc<Mutex<EasyFileSystem>>,
     block_device: Arc<dyn BlockDevice>,
+    /// inode_id
+    pub inode_id: u32,
 }
 
 impl Inode {
@@ -21,12 +23,14 @@ impl Inode {
         block_offset: usize,
         fs: Arc<Mutex<EasyFileSystem>>,
         block_device: Arc<dyn BlockDevice>,
+        inode_id: u32,
     ) -> Self {
         Self {
             block_id: block_id as usize,
             block_offset,
             fs,
             block_device,
+            inode_id
         }
     }
     /// Call a function over a disk inode to read it
@@ -40,6 +44,32 @@ impl Inode {
         get_block_cache(self.block_id, Arc::clone(&self.block_device))
             .lock()
             .modify(self.block_offset, f)
+    }
+
+    /// whether current inode is a file
+    pub fn is_file(&self) -> bool {
+        self.read_disk_inode(|disk| {
+            disk.is_file()
+        })
+    }
+
+    /// whether current inode is a directory
+    pub fn is_dir(&self) -> bool {
+        self.read_disk_inode(|disk| {
+            disk.is_dir()
+        })
+    }
+
+    /// get link count
+    pub fn link_count(&self) -> u32 {
+        self.read_disk_inode(|disk|
+            disk.link
+        )
+    }
+
+    /// get data size in current inode
+    fn size(&self) -> u32 {
+        self.read_disk_inode(|disk| disk.size)
     }
     /// Find inode under a disk inode by name
     fn find_inode_id(&self, name: &str, disk_inode: &DiskInode) -> Option<u32> {
@@ -69,6 +99,7 @@ impl Inode {
                     block_offset,
                     self.fs.clone(),
                     self.block_device.clone(),
+                    inode_id,
                 ))
             })
         })
@@ -135,25 +166,32 @@ impl Inode {
             block_offset,
             self.fs.clone(),
             self.block_device.clone(),
+            new_inode_id,
         )))
         // release efs lock automatically by compiler
     }
     /// List inodes under current inode
-    pub fn ls(&self) -> Vec<String> {
+    fn list_entries(&self) -> Vec<DirEntry> {
         let _fs = self.fs.lock();
         self.read_disk_inode(|disk_inode| {
             let file_count = (disk_inode.size as usize) / DIRENT_SZ;
-            let mut v: Vec<String> = Vec::new();
+            let mut v: Vec<DirEntry> = Vec::new();
             for i in 0..file_count {
                 let mut dirent = DirEntry::empty();
                 assert_eq!(
                     disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device,),
                     DIRENT_SZ,
                 );
-                v.push(String::from(dirent.name()));
+                v.push(dirent);
             }
             v
         })
+    }
+
+    /// List inodes under current inode
+    pub fn ls(&self) -> Vec<String> {
+        self.list_entries().into_iter()
+            .map(|entry| entry.name().to_string()).collect()
     }
     /// Read data from current inode
     pub fn read_at(&self, offset: usize, buf: &mut [u8]) -> usize {
@@ -182,5 +220,53 @@ impl Inode {
             }
         });
         block_cache_sync_all();
+    }
+
+    /// get inode number of the file
+    pub fn inode_id(&self) -> u32 {
+        self.inode_id
+    }
+
+    /// link a file in current directory
+    pub fn link(&self, new_name: String, file_inode: Arc<Inode>) {
+
+        assert!(self.is_dir());
+        let new_entry = DirEntry::new(new_name.as_str(), file_inode.inode_id);
+        assert_eq!(self.write_at(self.size() as usize, new_entry.as_bytes()), core::mem::size_of::<DirEntry>());
+        file_inode.increment_link();
+    }
+
+    /// unlink a file, when link count is 0, delete it
+    pub fn unlink(&self, name: String, file_inode: Arc<Inode>) {
+        assert!(self.is_dir());
+        let remained_entries: Vec<DirEntry> = self.list_entries().into_iter()
+            .filter(|entry| entry.name() != name).collect();
+        self.clear();
+        let mut offset = 0;
+        for entry in remained_entries {
+            self.write_at(offset, entry.as_bytes());
+            offset += DIRENT_SZ;
+        }
+
+        file_inode.decrement_link();
+        if file_inode.link_count() == 0 {
+            file_inode.clear();
+            let mut fs = self.fs.lock();
+            fs.dealloc_inode(file_inode.inode_id);
+        }
+    }
+
+    /// increment link count by 1
+    pub fn increment_link(&self) {
+        self.modify_disk_inode(|disk| {
+            disk.link += 1;
+        })
+    }
+
+    /// decrement link count by 1
+    pub fn decrement_link(&self) {
+        self.modify_disk_inode(|disk| {
+            disk.link -= 1;
+        })
     }
 }

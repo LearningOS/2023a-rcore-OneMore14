@@ -273,7 +273,7 @@ impl TaskControlBlock {
                         Some(Arc::new(Stdout)),
                         // 2 -> stderr
                         Some(Arc::new(Stdout)),
-                    ], // todo 继承还是更新?
+                    ], // 为了简单，不继承
                     heap_bottom: user_sp,
                     program_brk: user_sp,
                     start_time_us: None,
