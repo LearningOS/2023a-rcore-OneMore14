@@ -7,7 +7,7 @@ use super::{add_task, SignalFlags};
 use super::{pid_alloc, PidHandle};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{translated_refmut, MemorySet, KERNEL_SPACE};
-use crate::sync::{Condvar, Mutex, Semaphore, UPSafeCell};
+use crate::sync::{Condvar, DeadLockDetector, Mutex, Semaphore, UPSafeCell};
 use crate::trap::{trap_handler, TrapContext};
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
@@ -45,10 +45,16 @@ pub struct ProcessControlBlockInner {
     pub task_res_allocator: RecycleAllocator,
     /// mutex list
     pub mutex_list: Vec<Option<Arc<dyn Mutex>>>,
+    /// mutex deadlock detector
+    pub mutex_deadlock_detector: DeadLockDetector,
     /// semaphore list
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
+    /// semaphore deadlock detector
+    pub semaphore_deadlock_detector: DeadLockDetector,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// is deadlock detect enabled?
+    pub is_deadlock_detect_enabled: bool,
 }
 
 impl ProcessControlBlockInner {
@@ -117,8 +123,11 @@ impl ProcessControlBlock {
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
                     mutex_list: Vec::new(),
+                    mutex_deadlock_detector: DeadLockDetector::new(),
                     semaphore_list: Vec::new(),
+                    semaphore_deadlock_detector: DeadLockDetector::new(),
                     condvar_list: Vec::new(),
+                    is_deadlock_detect_enabled: false,
                 })
             },
         });
@@ -243,8 +252,11 @@ impl ProcessControlBlock {
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
                     mutex_list: Vec::new(),
+                    mutex_deadlock_detector: DeadLockDetector::new(),
                     semaphore_list: Vec::new(),
+                    semaphore_deadlock_detector: DeadLockDetector::new(),
                     condvar_list: Vec::new(),
+                    is_deadlock_detect_enabled: false,
                 })
             },
         });
